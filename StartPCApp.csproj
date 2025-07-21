@@ -8,14 +8,15 @@
     <UseWPF>false</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>icon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyTitle>StartPCApp</AssemblyTitle>
     <AssemblyDescription>Windows系统管理工具，支持全局热键快速关机、定时关机和界面缩放调整</AssemblyDescription>
     <AssemblyCompany>StartPCApp Team</AssemblyCompany>
     <AssemblyProduct>StartPCApp</AssemblyProduct>
     <AssemblyCopyright>Copyright © 2024 StartPCApp Team</AssemblyCopyright>
-    <AssemblyVersion>1.4.1.0</AssemblyVersion>
-    <FileVersion>1.4.1.0</FileVersion>
-    <Version>1.4.1</Version>
+    <AssemblyVersion>1.4.2.0</AssemblyVersion>
+    <FileVersion>1.4.2.0</FileVersion>
+    <Version>1.4.2</Version>
   </PropertyGroup>
 
   <ItemGroup>

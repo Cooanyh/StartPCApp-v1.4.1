@@ -157,14 +157,24 @@ namespace StartPCApp
                 
                 this.Controls.Add(webView);
                 
-                // 设置WebView2环境选项
-                var options = CoreWebView2Environment.CreateAsync(null, null, new CoreWebView2EnvironmentOptions
+                // 设置用户数据目录到AppData，避免权限问题
+                string userDataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "StartPCApp", "WebView2Data");
+                if (!Directory.Exists(userDataFolder))
                 {
-                    AdditionalBrowserArguments = "--disable-web-security --allow-running-insecure-content --disable-features=VizDisplayCompositor"
-                });
+                    Directory.CreateDirectory(userDataFolder);
+                }
+                
+                // 设置WebView2环境选项
+                var environmentOptions = new CoreWebView2EnvironmentOptions
+                {
+                    AdditionalBrowserArguments = "--disable-web-security --allow-running-insecure-content --disable-features=VizDisplayCompositor --no-sandbox --disable-gpu-sandbox"
+                };
+                
+                // 创建WebView2环境，指定用户数据目录
+                var environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder, environmentOptions);
                 
                 // 等待WebView2初始化完成
-                await webView.EnsureCoreWebView2Async(await options);
+                await webView.EnsureCoreWebView2Async(environment);
                 
                 // 基本设置 - 保持简单避免显示问题
                 webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
@@ -263,23 +273,61 @@ namespace StartPCApp
             catch (Exception ex)
             {
                 // 详细的错误处理
-                string errorMessage = $"初始化WebView时出错: {ex.Message}";
+                string errorMessage = $"WebView2初始化失败: {ex.Message}";
+                string solutions = "";
+                
                 if (ex.HResult == unchecked((int)0x80070005)) // E_ACCESSDENIED
                 {
-                    errorMessage += "\n\n可能的解决方案:\n1. 以管理员身份运行程序\n2. 确保已安装Microsoft Edge WebView2运行时\n3. 检查防病毒软件是否阻止了程序";
+                    solutions = "\n\n解决方案:\n1. 以管理员身份运行程序\n2. 检查防病毒软件是否阻止程序访问\n3. 确保用户数据目录有写入权限";
+                }
+                else if (ex.Message.Contains("Expecting object to be local"))
+                {
+                    solutions = "\n\n解决方案:\n1. 重启程序\n2. 以管理员身份运行\n3. 安装最新版Microsoft Edge\n4. 重新安装WebView2运行时";
+                }
+                else if (ex.Message.Contains("WebView2") || ex.Message.Contains("CoreWebView2"))
+                {
+                    solutions = "\n\n解决方案:\n1. 安装Microsoft Edge WebView2运行时\n2. 更新Microsoft Edge浏览器\n3. 以管理员身份运行程序\n4. 检查系统是否支持WebView2";
+                }
+                else
+                {
+                    solutions = "\n\n解决方案:\n1. 重启程序\n2. 以管理员身份运行\n3. 检查系统兼容性\n4. 联系技术支持";
                 }
                 
-                MessageBox.Show(errorMessage, "WebView初始化错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                errorMessage += solutions;
+                
+                // 记录详细错误信息
+                string logMessage = $"WebView2初始化错误详情:\n" +
+                                  $"错误消息: {ex.Message}\n" +
+                                  $"错误代码: 0x{ex.HResult:X8}\n" +
+                                  $"堆栈跟踪: {ex.StackTrace}\n" +
+                                  $"用户数据目录: {Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "StartPCApp", "WebView2Data")}";
+                
+                try
+                {
+                    string logPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "StartPCApp", "error.log");
+                    File.WriteAllText(logPath, $"[{DateTime.Now}] {logMessage}\n\n");
+                }
+                catch { /* 忽略日志写入错误 */ }
+                
+                MessageBox.Show(errorMessage, "WebView2初始化错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 
                 // 创建一个简单的标签作为回退
                 Label fallbackLabel = new Label
                 {
-                    Text = "WebView初始化失败\n\n请以管理员身份运行程序\n或安装Microsoft Edge WebView2运行时",
+                    Text = "WebView2初始化失败\n\n" +
+                           "可能原因:\n" +
+                           "• 缺少WebView2运行时\n" +
+                           "• 权限不足\n" +
+                           "• 系统兼容性问题\n\n" +
+                           "请尝试:\n" +
+                           "1. 以管理员身份运行\n" +
+                           "2. 安装Microsoft Edge\n" +
+                           "3. 下载WebView2运行时",
                     Dock = DockStyle.Fill,
                     TextAlign = ContentAlignment.MiddleCenter,
-                    Font = new Font("Microsoft YaHei", 12, FontStyle.Bold),
-                    ForeColor = Color.Red,
-                    BackColor = Color.White
+                    Font = new Font("Microsoft YaHei", 10, FontStyle.Regular),
+                    ForeColor = Color.DarkRed,
+                    BackColor = Color.LightYellow
                 };
                 this.Controls.Add(fallbackLabel);
             }
@@ -354,11 +402,11 @@ namespace StartPCApp
         {
             try
             {
-                string[] settings = {
+                string[] lines = {
                     $"ScaleIndex={currentScaleIndex}",
                     $"CustomUrl={customUrl}"
                 };
-                File.WriteAllLines(settingsFilePath, settings);
+                File.WriteAllLines(settingsFilePath, lines);
             }
             catch (Exception ex)
             {
@@ -370,23 +418,42 @@ namespace StartPCApp
         {
             try
             {
-                // 注册 Alt+Q 一键关机
-                bool result1 = RegisterHotKey(this.Handle, HOTKEY_ID_SHUTDOWN, MOD_ALT, VK_Q);
-                // 注册 Alt+W 定时关机
-                bool result2 = RegisterHotKey(this.Handle, HOTKEY_ID_TIMER, MOD_ALT, VK_W);
-                // 注册 Alt+E 缩放调整
-                bool result3 = RegisterHotKey(this.Handle, HOTKEY_ID_SCALE, MOD_ALT, VK_E);
-                // 注册 Alt+R 自定义网页
-                bool result4 = RegisterHotKey(this.Handle, HOTKEY_ID_CUSTOM_URL, MOD_ALT, VK_R);
+                // 注册热键
+                bool success = true;
                 
-                if (!result1 || !result2 || !result3 || !result4)
+                if (!RegisterHotKey(this.Handle, HOTKEY_ID_SHUTDOWN, MOD_ALT, VK_Q))
                 {
-                    MessageBox.Show("热键注册失败，可能与其他程序冲突。\n\nAlt+Q: 一键关机\nAlt+W: 定时关机\nAlt+E: 缩放调整\nAlt+R: 自定义网页", "热键注册", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    success = false;
+                    MessageBox.Show("注册热键 Alt+Q 失败，可能与其他程序冲突", "热键注册警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                
+                if (!RegisterHotKey(this.Handle, HOTKEY_ID_TIMER, MOD_ALT, VK_W))
+                {
+                    success = false;
+                    MessageBox.Show("注册热键 Alt+W 失败，可能与其他程序冲突", "热键注册警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                
+                if (!RegisterHotKey(this.Handle, HOTKEY_ID_SCALE, MOD_ALT, VK_E))
+                {
+                    success = false;
+                    MessageBox.Show("注册热键 Alt+E 失败，可能与其他程序冲突", "热键注册警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                
+                if (!RegisterHotKey(this.Handle, HOTKEY_ID_CUSTOM_URL, MOD_ALT, VK_R))
+                {
+                    success = false;
+                    MessageBox.Show("注册热键 Alt+R 失败，可能与其他程序冲突", "热键注册警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                
+                if (success)
+                {
+                    // 可以选择显示成功消息，或者保持静默
+                    // MessageBox.Show("所有热键注册成功！", "信息", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"热键注册错误: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"热键注册失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
         
@@ -416,83 +483,25 @@ namespace StartPCApp
         
         private void HandleShutdownHotkey()
         {
-            var result = MessageBox.Show("确定要立即关机吗？", "一键关机 (Alt+Q)", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            var result = MessageBox.Show("确定要关机吗？", "关机确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (result == DialogResult.Yes)
             {
-                ShutdownComputer(0); // 立即关机
+                ShutdownComputer();
             }
         }
         
         private void HandleTimerHotkey()
         {
-            ShowTimerShutdownDialog();
-        }
-        
-        private void ShowTimerShutdownDialog()
-        {
             using (var dialog = new TimerShutdownDialog())
             {
                 if (dialog.ShowDialog() == DialogResult.OK)
                 {
-                    int minutes = dialog.Minutes;
-                    if (minutes > 0)
-                    {
-                        StartShutdownTimer(minutes);
-                    }
+                    SetupShutdownTimer(dialog.Minutes);
                 }
             }
         }
         
-        private void StartShutdownTimer(int minutes)
-        {
-            // 停止之前的定时器
-            shutdownTimer?.Stop();
-            shutdownTimer?.Dispose();
-            
-            // 创建新的定时器
-            shutdownTimer = new System.Windows.Forms.Timer();
-            shutdownTimer.Interval = minutes * 60 * 1000; // 转换为毫秒
-            shutdownTimer.Tick += (sender, e) =>
-            {
-                shutdownTimer.Stop();
-                ShutdownComputer(0);
-            };
-            
-            shutdownTimer.Start();
-            
-            MessageBox.Show($"定时关机已设置，将在 {minutes} 分钟后自动关机。\n\n再次按 Alt+W 可以重新设置时间。", "定时关机", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        
-        private void ShutdownComputer(uint delay)
-        {
-            try
-            {
-                // 使用系统命令关机
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "shutdown",
-                    Arguments = $"/s /t {delay}",
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                });
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"关机失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-        
         private void HandleScaleHotkey()
-        {
-            ShowScaleDialog();
-        }
-        
-        private void HandleCustomUrlHotkey()
-        {
-            ShowCustomUrlDialog();
-        }
-        
-        private void ShowScaleDialog()
         {
             using (var dialog = new ScaleDialog(currentScaleIndex))
             {
@@ -501,37 +510,12 @@ namespace StartPCApp
                     currentScaleIndex = dialog.SelectedScaleIndex;
                     currentScale = scaleOptions[currentScaleIndex];
                     ApplyScale();
+                    SaveSettings();
                 }
             }
         }
         
-        private void ApplyScale()
-        {
-            try
-            {
-                // 应用缩放到窗体
-                this.Scale(new SizeF(currentScale, currentScale));
-                
-                // 如果有WebView，也需要调整其缩放
-                if (webView?.CoreWebView2 != null)
-                {
-                    webView.CoreWebView2.Settings.IsGeneralAutofillEnabled = false;
-                    // 设置WebView的缩放因子
-                    webView.ZoomFactor = currentScale;
-                }
-                
-                // 保存设置
-                SaveSettings();
-                
-                MessageBox.Show($"缩放已设置为 {(int)(currentScale * 100)}%", "缩放设置", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"缩放设置失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-        
-        private void ShowCustomUrlDialog()
+        private void HandleCustomUrlHotkey()
         {
             using (var dialog = new CustomUrlDialog(customUrl))
             {
@@ -540,14 +524,61 @@ namespace StartPCApp
                     customUrl = dialog.CustomUrl;
                     SaveSettings();
                     
-                    // 导航到新的URL
+                    // 导航到新URL
                     if (webView?.CoreWebView2 != null)
                     {
                         webView.CoreWebView2.Navigate(customUrl);
                     }
-                    
-                    MessageBox.Show("自定义网页已设置并加载！", "设置成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
+            }
+        }
+        
+        private void ShutdownComputer()
+        {
+            try
+            {
+                // 使用Windows API关机
+                InitiateSystemShutdownEx(null, "系统将在10秒后关机", 10, true, false, 0);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"关机失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+        
+        private void SetupShutdownTimer(int minutes)
+        {
+            if (shutdownTimer != null)
+            {
+                shutdownTimer.Stop();
+                shutdownTimer.Dispose();
+            }
+            
+            shutdownTimer = new System.Windows.Forms.Timer();
+            shutdownTimer.Interval = minutes * 60 * 1000; // 转换为毫秒
+            shutdownTimer.Tick += (sender, e) =>
+            {
+                shutdownTimer.Stop();
+                ShutdownComputer();
+            };
+            shutdownTimer.Start();
+            
+            MessageBox.Show($"定时关机已设置，将在 {minutes} 分钟后关机", "定时关机", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        
+        private void ApplyScale()
+        {
+            try
+            {
+                // 应用到WebView
+                if (webView?.CoreWebView2 != null)
+                {
+                    webView.ZoomFactor = currentScale * 1.5; // 基础缩放 * 用户选择的缩放
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"应用缩放失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
         
@@ -555,78 +586,65 @@ namespace StartPCApp
         {
             try
             {
-                string appName = "StartPCApp";
-                string exePath = Assembly.GetExecutingAssembly().Location.Replace(".dll", ".exe");
-                
-                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", false))
+                // 检查是否设置了开机启动
+                RegistryKey key = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true);
+                if (key != null)
                 {
-                    bool isInStartup = key?.GetValue(appName) != null;
-                    
-                    if (!isInStartup)
+                    object value = key.GetValue("StartPCApp");
+                    if (value != null)
                     {
-                        var result = MessageBox.Show(
-                            "是否将此程序添加到开机启动项？\n\n这样可以在系统启动时自动运行程序。",
-                            "添加到启动项",
-                            MessageBoxButtons.YesNo,
-                            MessageBoxIcon.Question
-                        );
-                        
-                        if (result == DialogResult.Yes)
-                        {
-                            AddToStartup(appName, exePath);
-                            MessageBox.Show("已成功添加到开机启动项！", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        }
+                        // 已设置开机启动，可以在这里添加相关逻辑
                     }
+                    key.Close();
                 }
             }
             catch (Exception ex)
             {
-                // 静默处理启动项检查错误
-                System.Diagnostics.Debug.WriteLine($"启动项检查错误: {ex.Message}");
-            }
-        }
-        
-        private void AddToStartup(string appName, string exePath)
-        {
-            try
-            {
-                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true))
-                {
-                    key?.SetValue(appName, exePath);
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"添加启动项失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                // 忽略注册表访问错误
+                System.Diagnostics.Debug.WriteLine($"检查启动项失败: {ex.Message}");
             }
         }
         
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            // 取消注册热键
-            UnregisterHotKey(this.Handle, HOTKEY_ID_SHUTDOWN);
-            UnregisterHotKey(this.Handle, HOTKEY_ID_TIMER);
-            UnregisterHotKey(this.Handle, HOTKEY_ID_SCALE);
-            UnregisterHotKey(this.Handle, HOTKEY_ID_CUSTOM_URL);
+            try
+            {
+                // 注销所有热键
+                UnregisterHotKey(this.Handle, HOTKEY_ID_SHUTDOWN);
+                UnregisterHotKey(this.Handle, HOTKEY_ID_TIMER);
+                UnregisterHotKey(this.Handle, HOTKEY_ID_SCALE);
+                UnregisterHotKey(this.Handle, HOTKEY_ID_CUSTOM_URL);
+                
+                // 停止定时器
+                if (shutdownTimer != null)
+                {
+                    shutdownTimer.Stop();
+                    shutdownTimer.Dispose();
+                }
+                
+                // 释放WebView资源
+                if (webView != null)
+                {
+                    webView.Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"清理资源时出错: {ex.Message}");
+            }
             
-            // 停止定时器
-            shutdownTimer?.Stop();
-            shutdownTimer?.Dispose();
-            
-            webView?.Dispose();
             base.OnFormClosing(e);
         }
     }
     
     // 定时关机对话框
-    public partial class TimerShutdownDialog : Form
+    public class TimerShutdownDialog : Form
     {
-        private NumericUpDown numericUpDown;
-        private Button btnOK;
-        private Button btnCancel;
-        private Label lblMinutes;
-        
         public int Minutes { get; private set; }
+        
+        private NumericUpDown numericUpDown;
+        private Button okButton;
+        private Button cancelButton;
         
         public TimerShutdownDialog()
         {
@@ -635,253 +653,175 @@ namespace StartPCApp
         
         private void InitializeComponent()
         {
-            this.numericUpDown = new NumericUpDown();
-            this.btnOK = new Button();
-            this.btnCancel = new Button();
-            this.lblMinutes = new Label();
-            this.SuspendLayout();
-            
-            // lblMinutes
-            this.lblMinutes.AutoSize = true;
-            this.lblMinutes.Location = new System.Drawing.Point(12, 15);
-            this.lblMinutes.Name = "lblMinutes";
-            this.lblMinutes.Size = new System.Drawing.Size(200, 13);
-            this.lblMinutes.TabIndex = 0;
-            this.lblMinutes.Text = "请设置关机时间（分钟）：";
-            
-            // numericUpDown
-            this.numericUpDown.Location = new System.Drawing.Point(12, 35);
-            this.numericUpDown.Maximum = new decimal(new int[] { 1440, 0, 0, 0 }); // 最大24小时
-            this.numericUpDown.Minimum = new decimal(new int[] { 1, 0, 0, 0 });
-            this.numericUpDown.Name = "numericUpDown";
-            this.numericUpDown.Size = new System.Drawing.Size(200, 20);
-            this.numericUpDown.TabIndex = 1;
-            this.numericUpDown.Value = new decimal(new int[] { 30, 0, 0, 0 }); // 默认30分钟
-            
-            // btnOK
-            this.btnOK.DialogResult = DialogResult.OK;
-            this.btnOK.Location = new System.Drawing.Point(56, 70);
-            this.btnOK.Name = "btnOK";
-            this.btnOK.Size = new System.Drawing.Size(75, 23);
-            this.btnOK.TabIndex = 2;
-            this.btnOK.Text = "确定";
-            this.btnOK.UseVisualStyleBackColor = true;
-            this.btnOK.Click += new System.EventHandler(this.btnOK_Click);
-            
-            // btnCancel
-            this.btnCancel.DialogResult = DialogResult.Cancel;
-            this.btnCancel.Location = new System.Drawing.Point(137, 70);
-            this.btnCancel.Name = "btnCancel";
-            this.btnCancel.Size = new System.Drawing.Size(75, 23);
-            this.btnCancel.TabIndex = 3;
-            this.btnCancel.Text = "取消";
-            this.btnCancel.UseVisualStyleBackColor = true;
-            
-            // TimerShutdownDialog
-            this.AcceptButton = this.btnOK;
-            this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
-            this.AutoScaleMode = AutoScaleMode.Font;
-            this.CancelButton = this.btnCancel;
-            this.ClientSize = new System.Drawing.Size(224, 105);
-            this.Controls.Add(this.btnCancel);
-            this.Controls.Add(this.btnOK);
-            this.Controls.Add(this.numericUpDown);
-            this.Controls.Add(this.lblMinutes);
+            this.Text = "定时关机";
+            this.Size = new Size(300, 150);
+            this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
-            this.Name = "TimerShutdownDialog";
-            this.StartPosition = FormStartPosition.CenterParent;
-            this.Text = "定时关机设置";
-            this.TopMost = true;
-            this.ResumeLayout(false);
-            this.PerformLayout();
-        }
-        
-        private void btnOK_Click(object sender, EventArgs e)
-        {
-            Minutes = (int)numericUpDown.Value;
-            this.DialogResult = DialogResult.OK;
-            this.Close();
+            
+            Label label = new Label
+            {
+                Text = "请输入关机时间（分钟）：",
+                Location = new Point(20, 20),
+                Size = new Size(200, 20)
+            };
+            
+            numericUpDown = new NumericUpDown
+            {
+                Location = new Point(20, 50),
+                Size = new Size(100, 20),
+                Minimum = 1,
+                Maximum = 1440, // 最大24小时
+                Value = 30 // 默认30分钟
+            };
+            
+            okButton = new Button
+            {
+                Text = "确定",
+                Location = new Point(140, 80),
+                Size = new Size(60, 25),
+                DialogResult = DialogResult.OK
+            };
+            okButton.Click += (sender, e) => { Minutes = (int)numericUpDown.Value; };
+            
+            cancelButton = new Button
+            {
+                Text = "取消",
+                Location = new Point(210, 80),
+                Size = new Size(60, 25),
+                DialogResult = DialogResult.Cancel
+            };
+            
+            this.Controls.AddRange(new Control[] { label, numericUpDown, okButton, cancelButton });
+            this.AcceptButton = okButton;
+            this.CancelButton = cancelButton;
         }
     }
     
-    public partial class ScaleDialog : Form
+    // 缩放对话框
+    public class ScaleDialog : Form
     {
-        private ComboBox comboBoxScale;
-        private Button btnOK;
-        private Button btnCancel;
-        private Label lblScale;
-        
         public int SelectedScaleIndex { get; private set; }
+        
+        private ComboBox comboBox;
+        private Button okButton;
+        private Button cancelButton;
+        
+        private readonly string[] scaleTexts = { "75%", "100%", "125%", "150%", "175%", "200%" };
         
         public ScaleDialog(int currentScaleIndex)
         {
             SelectedScaleIndex = currentScaleIndex;
             InitializeComponent();
-            comboBoxScale.SelectedIndex = currentScaleIndex;
         }
         
         private void InitializeComponent()
         {
-            this.comboBoxScale = new ComboBox();
-            this.btnOK = new Button();
-            this.btnCancel = new Button();
-            this.lblScale = new Label();
-            this.SuspendLayout();
-            
-            // ScaleDialog
-            this.AutoScaleDimensions = new SizeF(6F, 13F);
-            this.AutoScaleMode = AutoScaleMode.Font;
-            this.ClientSize = new Size(280, 120);
-            this.Controls.Add(this.lblScale);
-            this.Controls.Add(this.comboBoxScale);
-            this.Controls.Add(this.btnOK);
-            this.Controls.Add(this.btnCancel);
+            this.Text = "界面缩放";
+            this.Size = new Size(300, 150);
+            this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
-            this.Name = "ScaleDialog";
-            this.StartPosition = FormStartPosition.CenterParent;
-            this.Text = "缩放设置";
-            this.TopMost = true;
             
-            // lblScale
-            this.lblScale.AutoSize = true;
-            this.lblScale.Location = new Point(12, 15);
-            this.lblScale.Name = "lblScale";
-            this.lblScale.Size = new Size(150, 13);
-            this.lblScale.TabIndex = 0;
-            this.lblScale.Text = "请选择程序缩放比例：";
+            Label label = new Label
+            {
+                Text = "请选择缩放比例：",
+                Location = new Point(20, 20),
+                Size = new Size(200, 20)
+            };
             
-            // comboBoxScale
-            this.comboBoxScale.DropDownStyle = ComboBoxStyle.DropDownList;
-            this.comboBoxScale.FormattingEnabled = true;
-            this.comboBoxScale.Items.AddRange(new object[] {
-                "75% (小)",
-                "100% (正常)",
-                "125% (中等)",
-                "150% (大)",
-                "175% (很大)",
-                "200% (超大)"
-            });
-            this.comboBoxScale.Location = new Point(12, 35);
-            this.comboBoxScale.Name = "comboBoxScale";
-            this.comboBoxScale.Size = new Size(250, 21);
-            this.comboBoxScale.TabIndex = 1;
+            comboBox = new ComboBox
+            {
+                Location = new Point(20, 50),
+                Size = new Size(100, 20),
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            comboBox.Items.AddRange(scaleTexts);
+            comboBox.SelectedIndex = SelectedScaleIndex;
             
-            // btnOK
-            this.btnOK.DialogResult = DialogResult.OK;
-            this.btnOK.Location = new Point(106, 70);
-            this.btnOK.Name = "btnOK";
-            this.btnOK.Size = new Size(75, 23);
-            this.btnOK.TabIndex = 2;
-            this.btnOK.Text = "确定";
-            this.btnOK.UseVisualStyleBackColor = true;
-            this.btnOK.Click += new EventHandler(this.btnOK_Click);
+            okButton = new Button
+            {
+                Text = "确定",
+                Location = new Point(140, 80),
+                Size = new Size(60, 25),
+                DialogResult = DialogResult.OK
+            };
+            okButton.Click += (sender, e) => { SelectedScaleIndex = comboBox.SelectedIndex; };
             
-            // btnCancel
-            this.btnCancel.DialogResult = DialogResult.Cancel;
-            this.btnCancel.Location = new Point(187, 70);
-            this.btnCancel.Name = "btnCancel";
-            this.btnCancel.Size = new Size(75, 23);
-            this.btnCancel.TabIndex = 3;
-            this.btnCancel.Text = "取消";
-            this.btnCancel.UseVisualStyleBackColor = true;
+            cancelButton = new Button
+            {
+                Text = "取消",
+                Location = new Point(210, 80),
+                Size = new Size(60, 25),
+                DialogResult = DialogResult.Cancel
+            };
             
-            this.ResumeLayout(false);
-            this.PerformLayout();
-        }
-        
-        private void btnOK_Click(object sender, EventArgs e)
-        {
-            SelectedScaleIndex = comboBoxScale.SelectedIndex;
-            this.DialogResult = DialogResult.OK;
-            this.Close();
+            this.Controls.AddRange(new Control[] { label, comboBox, okButton, cancelButton });
+            this.AcceptButton = okButton;
+            this.CancelButton = cancelButton;
         }
     }
     
-    public partial class CustomUrlDialog : Form
+    // 自定义URL对话框
+    public class CustomUrlDialog : Form
     {
         public string CustomUrl { get; private set; }
         
-        private TextBox urlTextBox;
+        private TextBox textBox;
         private Button okButton;
         private Button cancelButton;
         
         public CustomUrlDialog(string currentUrl)
         {
+            CustomUrl = currentUrl;
             InitializeComponent();
-            urlTextBox.Text = currentUrl;
         }
         
         private void InitializeComponent()
         {
-            this.Text = "设置自定义网页";
-            this.Size = new Size(450, 150);
+            this.Text = "自定义URL";
+            this.Size = new Size(400, 150);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             
-            // 创建标签
             Label label = new Label
             {
-                Text = "请输入网页URL:",
+                Text = "请输入网页URL：",
                 Location = new Point(20, 20),
                 Size = new Size(200, 20)
             };
             
-            // 创建文本框
-            urlTextBox = new TextBox
+            textBox = new TextBox
             {
                 Location = new Point(20, 50),
-                Size = new Size(390, 25)
+                Size = new Size(340, 20),
+                Text = CustomUrl
             };
             
-            // 创建按钮
             okButton = new Button
             {
                 Text = "确定",
-                Location = new Point(255, 85),
-                Size = new Size(75, 25),
+                Location = new Point(240, 80),
+                Size = new Size(60, 25),
                 DialogResult = DialogResult.OK
             };
-            okButton.Click += OkButton_Click;
+            okButton.Click += (sender, e) => { CustomUrl = textBox.Text; };
             
             cancelButton = new Button
             {
                 Text = "取消",
-                Location = new Point(335, 85),
-                Size = new Size(75, 25),
+                Location = new Point(310, 80),
+                Size = new Size(60, 25),
                 DialogResult = DialogResult.Cancel
             };
             
-            // 添加控件到窗体
-            this.Controls.AddRange(new Control[] { label, urlTextBox, okButton, cancelButton });
-            
-            // 设置默认按钮
+            this.Controls.AddRange(new Control[] { label, textBox, okButton, cancelButton });
             this.AcceptButton = okButton;
             this.CancelButton = cancelButton;
-        }
-        
-        private void OkButton_Click(object sender, EventArgs e)
-        {
-            string url = urlTextBox.Text.Trim();
-            if (!string.IsNullOrEmpty(url))
-            {
-                // 简单的URL验证
-                if (!url.StartsWith("http://") && !url.StartsWith("https://"))
-                {
-                    url = "https://" + url;
-                }
-                CustomUrl = url;
-            }
-            else
-            {
-                MessageBox.Show("请输入有效的URL", "错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                this.DialogResult = DialogResult.None;
-            }
         }
     }
 }
